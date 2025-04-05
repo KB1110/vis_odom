@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Log files
+*.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+
+# IDE-specific files
+.vscode/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Camera calibration or output files
+*.pdf
+*.yml
+*.xml
+*.json
+*.png
+*.jpg
+*.mp4
