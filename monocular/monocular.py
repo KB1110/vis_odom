@@ -47,8 +47,9 @@ bf = cv.BFMatcher(cv.NORM_HAMMING2, crossCheck = False)
 x, y, w, h = ROI
 
 trajectory = []
-pose_R = np.eye(3)
-pose_t = np.zeros((3, 1))
+
+cam_pose = np.zeros((3, 1))
+cam_transformation = np.eye(4)
 
 frame = cv.VideoCapture(0, cv.CAP_V4L2)
 
@@ -68,6 +69,9 @@ ax.set_zlim3d(0, 20)
 
 ax.legend()
 
+plt.draw()
+plt.pause(0.001)
+
 while True:
     ret, img = frame.read()
     if not ret:
@@ -77,83 +81,103 @@ while True:
     gray = cv.undistort(gray, INTRINSICS, DISTORTION_COEFF, None, OPTIMAL_INTRINSICS)
     gray = gray[y:y+h, x:x+w]
     gray = cv.flip(gray, 1)
-    keypoints = orb.detect(gray, None)
-
-    keypoints = sorted(keypoints, key=lambda x: x.response, reverse = True)
-
-    selected_keypoints = ssc.ssc(
-        keypoints, 300, 0.5, gray.shape[1], gray.shape[0]
-    )
-    selected_keypoints, selected_descriptors = orb.compute(gray, selected_keypoints)
 
     if not first_frame:
-        matches = bf.knnMatch(prev_descriptors, selected_descriptors, k = 2)
+        next_pts, status, _ = cv.calcOpticalFlowPyrLK(prev_gray, gray, np.array(prev_pts, dtype=np.float32), None)
+        good_prev = np.array(prev_pts)[status.ravel() == 1]
+        good_curr = next_pts[status.ravel() == 1]
         
-        pts1 = []
-        pts2 = []
+        if len(good_prev) < 8:
+            print("[INFO] Optical Flow failed, fallback to ORB keypoints")  
+            keypoints = orb.detect(gray, None)
+            keypoints = sorted(keypoints, key=lambda x: x.response, reverse = True)
+            selected_keypoints = ssc.ssc(
+                keypoints, 300, 0.5, gray.shape[1], gray.shape[0]
+            )
+            selected_keypoints, selected_descriptors = orb.compute(gray, selected_keypoints)
+            matches = bf.knnMatch(prev_descriptors, selected_descriptors, k = 2)
         
-        # ratio test as per Lowe's paper
-        for i, (m, n) in enumerate(matches):
-            if m.distance < LOWE_RATIO * n.distance:
-                pts1.append(prev_keypoints[m.queryIdx].pt)
-                pts2.append(selected_keypoints[m.trainIdx].pt)
+            good_prev = []
+            good_curr = []
         
-        pts1 = np.int32(pts1)
-        pts2 = np.int32(pts2)
-        E, mask = cv.findEssentialMat(pts1, pts2, OPTIMAL_INTRINSICS, method = cv.RANSAC, prob = 0.999, threshold = 1.0)
+            # ratio test as per Lowe's paper
+            for i, (m, n) in enumerate(matches):
+                if m.distance < LOWE_RATIO * n.distance:
+                    good_prev.append(prev_keypoints[m.queryIdx].pt)
+                    good_curr.append(selected_keypoints[m.trainIdx].pt)
         
+            good_prev = np.asarray(good_prev, dtype=np.float32)
+            good_curr = np.asarray(good_curr, dtype=np.float32)
+            
+            prev_descriptors = selected_descriptors
+            prev_keypoints = selected_keypoints
+
+        img_display = cv.cvtColor(gray, cv.COLOR_GRAY2BGR)
+        for pt in good_curr:
+            color = tuple(np.random.randint(0, 255, 3).tolist())
+            cv.circle(img_display, tuple(map(int, pt)), 4, color, -1)
+
+        cv.imshow("Tracked Points", img_display)
+        
+        if good_prev.shape[0] < 8 or good_curr.shape[0] < 8:
+            print("[WARN] Not enough points for findEssentialMat")
+            prev_pts = [kp.pt for kp in selected_keypoints]
+            continue
+            
+        E, mask = cv.findEssentialMat(good_prev, good_curr, OPTIMAL_INTRINSICS, method = cv.RANSAC, prob = 0.999, threshold = 1.0)
+        print("Mean flow:", np.mean(np.linalg.norm(good_prev - good_curr, axis=1)))
+        print("Inliers:", np.sum(mask), "/", len(mask))
         print("Essential Matrix: ")
         print(E)
         
-        if E is None or mask is None or E.shape[0] % 3 != 0:
-            print("[WARN] Invalid essential matrix shape or None.")
-            continue
-
-        # Reshape and extract first 3x3 matrix
-        if E.shape[0] > 3:
-            print(f"[INFO] Multiple solutions returned. Using the first one. Shape: {E.shape}")
-            E = E[:3, :]
-
-        mask = mask.ravel()
-        if mask.sum() < 8:
-            print(f"[WARN] Not enough inliers ({mask.sum()}) to compute epilines.")
-            continue
+        flow_magnitude = np.mean(np.linalg.norm(good_prev - good_curr, axis=1))
+        if flow_magnitude < 0.8:
+            print("Likely no motion — skipping pose update")
+            prev_pts = good_curr
         
-        retval, R, t, mask_pose = cv.recoverPose(E, pts1, pts2, OPTIMAL_INTRINSICS, mask = mask)
-        
-        # Update current pose
-        pose_t += pose_R @ t  # move in current orientation
-        pose_R = R @ pose_R   # rotate
+        if (E is not None and mask is not None and E.shape[0] % 3 == 0) and flow_magnitude >= 0.8:
+            if E.shape[0] > 3:
+                E = E[:3, :]
 
-        trajectory.append(pose_t.flatten())
-        trajectory_np = np.array(trajectory)
+            retval, R, t, mask_pose = cv.recoverPose(E, good_prev, good_curr, OPTIMAL_INTRINSICS, mask = mask)
+            
+            H = np.eye(4)
+            H[:3, :3] = R
+            H[:3, 3:] = t
+            cam_transformation = cam_transformation @ H
+            cam_pose = cam_transformation[:3, 3].reshape(3, 1)
+            
+            
+            trajectory.append(cam_transformation[:3, 3].flatten())
+            trajectory_np = np.array(trajectory)
+            trajectory_plot.set_data(trajectory_np[:, 0], trajectory_np[:, 1])
+            trajectory_plot.set_3d_properties(trajectory_np[:, 2])
+            plt.draw()
+            plt.pause(0.001)
 
-        trajectory_plot.set_data(trajectory_np[:, 0], trajectory_np[:, 1])
-        trajectory_plot.set_3d_properties(trajectory_np[:, 2])
-        plt.draw()
-        plt.pause(0.001)
+            # lines1 = cv.computeCorrespondEpilines(good_curr.reshape(-1, 1, 2), 2, E)
+            # lines1 = lines1.reshape(-1, 3)
+            # img5, img6 = drawlines(prev_gray, gray, lines1, good_prev, good_curr)
+            # epilines_img = np.hstack((img5, img6))
+            # cv.imshow("Epilines", epilines_img)
+                
+        prev_pts = good_curr
 
-        # Find epilines corresponding to points in right image (second image) and
-        # drawing its lines on left image
-        lines1 = cv.computeCorrespondEpilines(pts2.reshape(-1,1,2), 2, E)
-        lines1 = lines1.reshape(-1,3)
-        img5,img6 = drawlines(prev_gray, gray,lines1,pts1,pts2)
-        
-        epilines_img = np.hstack((img5, img6))
-        
-        cv.imshow("Epilines", epilines_img)
+    else:
+        keypoints = orb.detect(gray, None)
+        keypoints = sorted(keypoints, key=lambda x: x.response, reverse = True)
+        selected_keypoints = ssc.ssc(
+            keypoints, 300, 0.5, gray.shape[1], gray.shape[0]
+        )
+        selected_keypoints, selected_descriptors = orb.compute(gray, selected_keypoints)
+        prev_keypoints = selected_keypoints
+        prev_descriptors = selected_descriptors
+        prev_pts = [kp.pt for kp in selected_keypoints]
+        first_frame = False
 
-    keypoints_img = cv.drawKeypoints(gray, selected_keypoints, None, color=(0, 255, 0), flags=cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-
-    cv.imshow("After", keypoints_img)
+    prev_gray = gray.copy()
     if cv.waitKey(1) & 0xFF == ord('q'):
         break
-
-    prev_keypoints = selected_keypoints
-    prev_descriptors = selected_descriptors
-    prev_gray = gray
-    
-    first_frame = False
 
 frame.release()
 cv.destroyAllWindows()
