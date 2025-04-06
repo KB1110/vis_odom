@@ -12,7 +12,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 
 images_dir = os.path.join(script_dir, 'checkerboard_imgs')
 
-images = glob.glob(os.path.join(images_dir, '*.jpg'))
+images = glob.glob(os.path.join(images_dir, '*.png'))
 
 pattern_size = (8,6); #interior number of corners
 
@@ -20,8 +20,8 @@ pattern_size = (8,6); #interior number of corners
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
  
 # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
-objp = np.zeros((6*7,3), np.float32)
-objp[:,:2] = np.mgrid[0:7,0:6].T.reshape(-1,2)
+objp = np.zeros((pattern_size[0] * pattern_size[1],3), np.float32)
+objp[:,:2] = np.mgrid[0 : pattern_size[1], 0 : pattern_size[0]].T.reshape(-1,2)
  
 # Arrays to store object points and image points from all the images.
 objpoints = [] # 3d point in real world space
@@ -44,7 +44,7 @@ for fname in images:
         # Draw and display the corners
         cv.drawChessboardCorners(img, pattern_size, corners2, ret)
         cv.imshow('img', img)
-        cv.waitKey(500)
+        cv.waitKey(10)
  
 cv.destroyAllWindows()
 
@@ -61,5 +61,14 @@ dst = cv.undistort(img, mtx, dist, None, newcameramtx)
 x, y, w, h = roi
 dst = dst[y:y+h, x:x+w]
 cv.imshow('calibrated image', dst)
+
+print("Camera matrix: ")
+print(mtx)
+print("Optimal Camera matrix: ")
+print(newcameramtx)
+print("Distortion coefficients: ")
+print(dist)
+print("ROI: ")
+print(roi)
 
 cv.waitKey(10000)
