@@ -99,9 +99,11 @@ def main():
 
             cv.imshow("Matches", matched_img)
 
-            trajectory = mono_VO.compute_trajectory(
+            camera_pose = mono_VO.compute_pose(
                 prev_good_keypoints, curr_good_keypoints, TIME_STEP
             )
+            
+            trajectory.append(camera_pose[:3, 3])
 
         prev_gray = gray
         prev_keypoints = curr_keypoints
