@@ -151,24 +151,24 @@ def main():
                 matchColor=-1, singlePointColor=None, matchesMask=None, flags=2
             )
 
-            matched_img = cv.drawMatches(
-                prev_gray,
-                prev_keypoints,
-                gray,
-                curr_keypoints,
-                good_matches,
-                None,
-                **draw_params,
-            )
+            # matched_img = cv.drawMatches(
+            #     prev_gray,
+            #     prev_keypoints,
+            #     gray,
+            #     curr_keypoints,
+            #     good_matches,
+            #     None,
+            #     **draw_params,
+            # )
 
-            cv.imshow("Matches", matched_img)
+            # cv.imshow("Matches", matched_img)
 
             time_step = timestamps[i] - timestamps[i - 1]
 
             camera_pose = mono_VO.compute_pose(
-                prev_good_keypoints, curr_good_keypoints, time_step, 1
+                prev_good_keypoints, curr_good_keypoints, time_step, 2
             )
-            camera_pose = FINAL_TRANSFORM @ camera_pose
+            # camera_pose = FINAL_TRANSFORM @ camera_pose
             trajectory.append(camera_pose[:3, 3])
 
         cv.imshow("Cam_feed", gray)

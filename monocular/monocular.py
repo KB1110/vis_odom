@@ -1,9 +1,22 @@
 import cv2 as cv
 import numpy as np
 from .ssc import ssc
+from scipy.optimize import least_squares
 
 
 class MonocularVisualOdometry:
+    __FINAL_TRANSFORM = np.array([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]) @ np.array([
+        [-1.0, 0.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+    
     def __init__(
         self,
         camera_matrix: np.ndarray,
@@ -28,9 +41,9 @@ class MonocularVisualOdometry:
         self.__homogeneous_camera_pose[:3, 3] = starting_pose.flatten()
 
         self.__orb = cv.ORB_create(
-            nfeatures=1000,
+            nfeatures=5000,
             scaleFactor=1.2,
-            nlevels=8,
+            nlevels=16,
             edgeThreshold=31,
             firstLevel=0,
             WTA_K=4,
@@ -84,9 +97,9 @@ class MonocularVisualOdometry:
 
         keypoints = self.__orb.detect(self.__gray, None)
 
-        keypoints = sorted(keypoints, key=lambda x: x.response, reverse=True)[:500]
+        keypoints = sorted(keypoints, key=lambda x: x.response, reverse=True)[:3000]
 
-        keypoints = ssc(keypoints, 250, 0.5, self.__gray.shape[1], self.__gray.shape[0])
+        keypoints = ssc(keypoints, 2500, 0.5, self.__gray.shape[1], self.__gray.shape[0])
 
         keypoints, descriptors = self.__orb.compute(self.__gray, keypoints)
 
@@ -130,7 +143,6 @@ class MonocularVisualOdometry:
         time_step: float = 0.01,
         post_process: int = 0,
     ):
-
         essential_matrix, mask = cv.findEssentialMat(
             prev_good_keypoints,
             curr_good_keypoints,
@@ -139,19 +151,80 @@ class MonocularVisualOdometry:
             0.999,
             1.0,
         )
+        # Use only inlier correspondences for all subsequent steps
+        if mask is not None:
+            prev_inliers = prev_good_keypoints[mask.ravel() == 1]
+            curr_inliers = curr_good_keypoints[mask.ravel() == 1]
+        else:
+            prev_inliers = prev_good_keypoints
+            curr_inliers = curr_good_keypoints
+
         transformation_matrix = self.__compute_transformation_matrix(
-            essential_matrix, prev_good_keypoints, curr_good_keypoints
+            essential_matrix, prev_inliers, curr_inliers
         )
+
+        # If post_process==2, refine pose using pose_only_refinement and apply Kalman filter
+        if post_process == 2:
+            # Triangulate points using the initial transformation
+            K = np.concatenate((self.__OPTIMAL_INTRINSICS, np.zeros((3, 1))), axis=1)
+            proj1 = self.__PROJECTION_MATRIX
+            proj2 = K @ transformation_matrix
+            points_4d = cv.triangulatePoints(
+                proj1, proj2, prev_inliers.T, curr_inliers.T
+            )
+            points_3d = (points_4d[:3, :] / points_4d[3, :]).T  # Nx3
+            points_2d = curr_inliers  # Nx2
+
+            # Triangulation Quality and Outlier Handling
+            # Filter out points with negative or very small depth
+            valid_depth = points_3d[:, 2] > 0.1
+            points_3d = points_3d[valid_depth]
+            points_2d = points_2d[valid_depth]
+
+            # Remove points with large reprojection error (optional, robust loss is also used below)
+            if len(points_3d) >= 8:
+                # Initial pose guess from transformation_matrix
+                R_init = transformation_matrix[:3, :3]
+                t_init = transformation_matrix[:3, 3]
+                rvec_init, _ = cv.Rodrigues(R_init)
+                # Pose-Only Refinement Initialization with robust loss
+                def reprojection_residuals(params, points_3d, points_2d, K):
+                    rvec = params[:3]
+                    tvec = params[3:]
+                    proj_points, _ = cv.projectPoints(points_3d, rvec, tvec, K, None)
+                    proj_points = proj_points.squeeze()
+                    return (proj_points - points_2d).ravel()
+                init_params = np.hstack([rvec_init.flatten(), t_init.flatten()])
+                from scipy.optimize import least_squares
+                result = least_squares(
+                    reprojection_residuals,
+                    init_params,
+                    args=(points_3d, points_2d, self.__OPTIMAL_INTRINSICS),
+                    method='trf',
+                    max_nfev=1000,
+                    loss='soft_l1'
+                )
+                rvec_opt = result.x[:3]
+                tvec_opt = result.x[3:]
+                R_refined, _ = cv.Rodrigues(rvec_opt)
+                t_refined = tvec_opt
+                # Build refined transformation matrix
+                transformation_matrix = np.eye(4)
+                transformation_matrix[:3, :3] = R_refined
+                transformation_matrix[:3, 3] = t_refined.flatten()
+            else:
+                # Not enough points for reliable refinement
+                pass
 
         self.__homogeneous_camera_pose = np.matmul(
             transformation_matrix, self.__homogeneous_camera_pose
         )
         cam_pose = self.__homogeneous_camera_pose[:3, 3]
 
-        if post_process == 1:
+        if post_process == 1 or post_process == 2:
             self.__kalman_filter_update(cam_pose, time_step)
 
-        return self.__homogeneous_camera_pose
+        return self.__FINAL_TRANSFORM @ self.__homogeneous_camera_pose
 
     def __compute_transformation_matrix(
         self,
@@ -272,3 +345,24 @@ class MonocularVisualOdometry:
         # Smoothed position
         smoothed_cam_pose = self.__X[:3].flatten()
         self.__homogeneous_camera_pose[:3, 3] = smoothed_cam_pose
+
+    def pose_only_refinement(self, points_3d, points_2d, K, rvec_init, tvec_init):
+        def reprojection_residuals(params, points_3d, points_2d, K):
+            rvec = params[:3]
+            tvec = params[3:]
+            proj_points, _ = cv.projectPoints(points_3d, rvec, tvec, K, None)
+            proj_points = proj_points.squeeze()
+            return (proj_points - points_2d).ravel()
+
+        init_params = np.hstack([rvec_init.flatten(), tvec_init.flatten()])
+        result = least_squares(
+            reprojection_residuals,
+            init_params,
+            args=(points_3d, points_2d, K),
+            method='trf',
+            max_nfev=1000
+        )
+        rvec_opt = result.x[:3]
+        tvec_opt = result.x[3:]
+        R_opt, _ = cv.Rodrigues(rvec_opt)
+        return R_opt, tvec_opt

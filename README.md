@@ -1,7 +1,18 @@
 # Visual Odometry Repository
 
-This repository is dedicated to implementing and experimenting with various types of visual odometry techniques. Originally, it was part of a larger SLAM project, but due to its complexity and importance, it has been turned into its own standalone project.
+This repository is dedicated to implementing and experimenting with various types of visual odometry techniques. The initial focus was on monocular visual odometry, which has now reached a stable point. Moving forward, development will shift towards implementing and improving stereo visual odometry methods.
 
 ## Status
 
-This project is currently a work in progress.
+- Monocular visual odometry: Feature-complete and stable.
+- Stereo visual odometry: Development in progress.
+
+## Monocular VO Demo
+
+Below is a demonstration of the monocular visual odometry system in action:
+
+![Monocular VO Demo](https://github.com/KB1110/vis_odom/tree/main/docs/mono_vo_kitti.gif)
+
+---
+
+Stay tuned for updates as stereo visual odometry features are added and improved.
