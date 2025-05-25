@@ -11,7 +11,7 @@ This repository is dedicated to implementing and experimenting with various type
 
 Below is a demonstration of the monocular visual odometry system in action:
 
-![Monocular VO Demo](https://github.com/KB1110/vis_odom/tree/main/docs/mono_vo_kitti.gif)
+![Monocular VO Demo](https://github.com/KB1110/vis_odom/blob/main/docs/mono_vo_kitti.gif?raw=true)
 
 ---
 
